@@ -4,6 +4,7 @@ from psycopg2.extras import RealDictCursor
 import csv
 import io
 import os
+import re
 from datetime import datetime, timedelta
 from functools import wraps
 
@@ -16,10 +17,12 @@ DB_URL = "postgresql://postgres.dwykmsiqyhujvltslbwi:aniwatza11.@aws-1-ap-southe
 USER_LOGIN = "23256"
 USER_PASS = "23256"
 
-# ข้อมูลระบบ (อัปเดตใช้ + แทนลูกน้ำ ป้องกันระบบฐานข้อมูลรวน)
+# ข้อมูลระบบ
 VACCINES_ALL = [
     "OPV1 + DTP-HB-hip1 + Rota1", 
+    "IPV1 (ใช้แทน OPV1)",
     "OPV2 + DTP-HB-hip2 + Rota2 + IPV", 
+    "IPV2 (ใช้แทน OPV2)",
     "OPV3 + DTP-HB-hip3", 
     "MMR1", 
     "LA-JE1", 
@@ -27,16 +30,17 @@ VACCINES_ALL = [
     "LA-JE2", 
     "OPV5 + DTP5"
 ]
+
 CORE_VACCINES = VACCINES_ALL
 VACCINE_SCHEDULE = {
-    2: "OPV1 + DTP-HB-hip1 + Rota1", 
-    4: "OPV2 + DTP-HB-hip2 + Rota2 + IPV", 
-    6: "OPV3 + DTP-HB-hip3", 
-    9: "MMR1", 
-    12: "LA-JE1", 
-    18: "OPV4 + DTP4 + MMR2", 
-    30: "LA-JE2", 
-    48: "OPV5 + DTP5"
+    2: ["OPV1 + DTP-HB-hip1 + Rota1", "IPV1 (ใช้แทน OPV1)"], 
+    4: ["OPV2 + DTP-HB-hip2 + Rota2 + IPV", "IPV2 (ใช้แทน OPV2)"], 
+    6: ["OPV3 + DTP-HB-hip3"], 
+    9: ["MMR1"], 
+    12: ["LA-JE1"], 
+    18: ["OPV4 + DTP4 + MMR2"], 
+    30: ["LA-JE2"], 
+    48: ["OPV5 + DTP5"]
 }
 
 STOCK_VACCINES = ["OPV", "DTP-HB-Hib", "Rota", "IPV", "MMR", "LA-JE1", "HPV", "dT", "DTP", "BCG", "HB1"]
@@ -89,16 +93,68 @@ LOGIN_HTML = '''<!DOCTYPE html><html><head><meta name="viewport" content="width=
 MAIN_HTML = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">''' + STYLE_ASSETS + '''</head><body>''' + NAV_BAR + '''
 <div class="container mt-4 pb-5">
     <form class="mb-4"><input type="text" name="search" class="form-control rounded-pill mb-3 border-0 shadow-sm py-3 px-4" placeholder="🔍 ค้นหาชื่อ หรือ เลขบัตรประชาชน..." value="{{search}}"><div class="d-flex justify-content-center gap-2"><button name="filter" value="all" class="btn btn-sm rounded-pill px-4 py-2 fw-bold {{'btn-dark' if current_filter=='all' else 'btn-outline-dark'}}">ทั้งหมด</button><button name="filter" value="this_month" class="btn btn-sm rounded-pill px-4 py-2 fw-bold {{'btn-warning text-dark' if current_filter=='this_month' else 'btn-outline-warning text-dark'}}">ต้องรับเดือนนี้</button><button name="filter" value="overdue" class="btn btn-sm rounded-pill px-4 py-2 fw-bold {{'btn-danger' if current_filter=='overdue' else 'btn-outline-danger'}}">ขาดนัด</button></div></form>
-    {% for c in children %}<div class="card p-3 mb-3"><div class="row align-items-center"><div class="col-8"><div class="mb-1"><span class="badge {{ 'bg-success' if c.in_zone else 'bg-secondary' }} px-2 py-1">{{ 'ในเขต' if c.in_zone else 'นอกเขต' }}</span>{% if c.status=='overdue' %}<span class="badge bg-danger ms-1 animate-pulse px-2 py-1"><i class="fas fa-exclamation-triangle"></i> ขาดนัด!</span>{% elif c.status=='this_month' %}<span class="badge bg-warning text-dark ms-1 px-2 py-1">นัดเดือนนี้</span>{% endif %}</div><h5 class="fw-bold m-0 text-dark">{{c.name}}</h5><small class="text-muted"><i class="fas fa-birthday-cake me-1"></i> {{c.birth_date}} ({{c.age_str}})</small><div class="mt-2"><div class="d-flex justify-content-between align-items-center"><small class="fw-bold text-success" style="font-size:0.75rem">รับวัคซีนแล้ว {{c.coverage_pct}}%</small></div><div class="progress mt-1" style="height: 6px; border-radius: 10px;"><div class="progress-bar bg-success progress-bar-striped progress-bar-animated" style="width:{{c.coverage_pct}}%"></div></div></div><div class="mt-3 d-flex gap-2"><button class="btn btn-sm btn-success rounded-pill px-3 shadow-sm fw-bold" data-bs-toggle="modal" data-bs-target="#service{{c.id}}"><i class="fas fa-syringe me-1"></i>ให้บริการ</button><a href="/profile/{{c.id}}" class="btn btn-sm btn-outline-primary rounded-pill px-3 fw-bold"><i class="fas fa-book-medical me-1"></i>สมุดสีชมพู</a><form action="/delete_child_full/{{c.id}}" method="POST" class="m-0 ms-auto" onsubmit="return confirm('ลบข้อมูลเด็กคนนี้?')"><button class="btn btn-sm text-danger border-0 bg-transparent p-1"><i class="fas fa-trash-alt"></i></button></form></div></div><div class="col-4 text-end border-start ps-2"><small class="text-muted d-block">นัดครั้งต่อไป</small><div class="fw-bold text-primary fs-5 mt-1">{{c.appoint_date or '-'}}</div><div class="text-danger fw-bold small mt-1" style="line-height:1.2;">{{c.next_vaccine or ''}}</div></div></div></div>
+    
+    {% for c in children %}
+    <div class="card p-3 mb-3">
+        <div class="row align-items-center">
+            <div class="col-8">
+                <div class="mb-1">
+                    <span class="badge {{ 'bg-success' if c.in_zone else 'bg-secondary' }} px-2 py-1">{{ 'ในเขต' if c.in_zone else 'นอกเขต' }}</span>
+                    {% if c.status=='overdue' %}<span class="badge bg-danger ms-1 animate-pulse px-2 py-1"><i class="fas fa-exclamation-triangle"></i> ขาดนัด!</span>
+                    {% elif c.status=='this_month' %}<span class="badge bg-warning text-dark ms-1 px-2 py-1">นัดเดือนนี้</span>{% endif %}
+                </div>
+                <h5 class="fw-bold m-0 text-dark">{{c.name}}</h5>
+                <small class="text-muted"><i class="fas fa-birthday-cake me-1"></i> {{c.birth_date}} ({{c.age_str}})</small>
+                <div class="mt-2">
+                    <small class="fw-bold text-success" style="font-size:0.75rem">รับวัคซีนแล้ว {{c.coverage_pct}}%</small>
+                    <div class="progress mt-1" style="height: 6px; border-radius: 10px;">
+                        <div class="progress-bar bg-success progress-bar-striped progress-bar-animated" style="width:{{c.coverage_pct}}%"></div>
+                    </div>
+                </div>
+                <div class="mt-3 d-flex flex-wrap gap-2">
+                    <button class="btn btn-sm btn-success rounded-pill px-3 shadow-sm fw-bold" data-bs-toggle="modal" data-bs-target="#service{{c.id}}"><i class="fas fa-syringe me-1"></i>ให้บริการ</button>
+                    <button class="btn btn-sm btn-outline-secondary rounded-pill px-3 fw-bold" data-bs-toggle="modal" data-bs-target="#editModal{{c.id}}"><i class="fas fa-edit me-1"></i>แก้ไข</button>
+                    <a href="/profile/{{c.id}}" class="btn btn-sm btn-outline-primary rounded-pill px-3 fw-bold"><i class="fas fa-book-medical me-1"></i>สมุด</a>
+                    <form action="/delete_child_full/{{c.id}}" method="POST" class="m-0 ms-auto" onsubmit="return confirm('ลบข้อมูลเด็กคนนี้?')">
+                        <button class="btn btn-sm text-danger border-0 bg-transparent p-1"><i class="fas fa-trash-alt"></i></button>
+                    </form>
+                </div>
+            </div>
+            <div class="col-4 text-end border-start ps-2">
+                <small class="text-muted d-block">นัดครั้งต่อไป</small>
+                <div class="fw-bold text-primary fs-6 mt-1">{{c.appoint_date or '-'}}</div>
+                <div class="text-danger fw-bold small mt-1" style="line-height:1.2; font-size:0.7rem;">{{c.next_vaccine or ''}}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="editModal{{c.id}}" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered text-black">
+            <div class="modal-content p-4">
+                <h5 class="fw-bold text-primary mb-3"><i class="fas fa-user-edit me-2"></i>แก้ไขข้อมูล: {{c.name}}</h5>
+                <form action="/edit_child/{{c.id}}" method="POST" class="row g-3">
+                    <div class="col-12"><label class="small fw-bold">ชื่อ-นามสกุล</label><input type="text" name="name" class="form-control" value="{{c.name}}" required></div>
+                    <div class="col-12"><label class="small fw-bold text-danger">วันเกิด (วว/ดด/พศ)</label><input type="text" name="birth_date" class="form-control border-danger" value="{{c.birth_date}}" required></div>
+                    <div class="col-12"><label class="small fw-bold">เลขบัตรประชาชน</label><input type="text" name="id_card" class="form-control" value="{{c.id_card}}"></div>
+                    <div class="col-12"><label class="small fw-bold">ที่อยู่ (ใส่เลขหมู่ เช่น ม.2)</label><input type="text" name="address" class="form-control" value="{{c.address}}"></div>
+                    <button class="btn btn-primary w-100 rounded-pill py-3 mt-4 fw-bold shadow-sm">บันทึกการแก้ไข</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <div class="modal fade" id="service{{c.id}}" tabindex="-1"><div class="modal-dialog modal-dialog-centered text-black"><div class="modal-content p-4"><h5 class="fw-bold text-success mb-3"><i class="fas fa-syringe me-2"></i>ให้บริการ: {{c.name}}</h5><form action="/provide_service/{{c.id}}" method="POST" class="row g-3">
     <div class="col-12 border-bottom pb-3"><label class="small fw-bold text-primary mb-1">วันที่รับบริการ</label><input type="text" name="visit_date" class="form-control bg-light" value="{{today_be}}"></div><div class="col-12"><label class="small fw-bold text-primary mb-1">สถานที่ฉีด</label><select name="location" class="form-select"><option value="รพ.สต.บางตะเคียน" selected>รพ.สต.บางตะเคียน</option><option value="รพ.สมเด็จพระสังฆราชองค์ที่ 17">รพ.สมเด็จพระสังฆราชองค์ที่ 17</option></select></div>
     <div class="col-4"><label class="small text-muted">หนัก(kg)</label><input type="number" step="0.1" name="weight" class="form-control" required></div><div class="col-4"><label class="small text-muted">สูง(cm)</label><input type="number" step="0.1" name="height" class="form-control" required></div><div class="col-4"><label class="small text-muted">รอบศีรษะ</label><input type="number" step="0.1" name="head_circ" class="form-control" required></div>
-    <div class="col-12 bg-light p-3 rounded-4 mt-3"><label class="fw-bold mb-2 text-dark"><i class="fas fa-check-square me-2 text-success"></i>วัคซีนที่ฉีดวันนี้</label><div class="row">{% for v in vaccines %}<div class="col-12 mb-2"><div class="form-check"><input class="form-check-input" type="checkbox" name="vaccines_today" value="{{v}}" id="chk_{{c.id}}_{{loop.index}}" {% if c.vaccines_today and v in c.vaccines_today %}checked{% endif %}><label class="form-check-label small" for="chk_{{c.id}}_{{loop.index}}">{{v}}</label></div></div>{% endfor %}</div></div><button class="btn btn-success w-100 rounded-pill py-3 mt-3 fw-bold shadow-sm">บันทึกประวัติ (ไม่ตัดสต็อก)</button></form></div></div></div>{% endfor %}
+    <div class="col-12 bg-light p-3 rounded-4 mt-3"><label class="fw-bold mb-2 text-dark"><i class="fas fa-check-square me-2 text-success"></i>วัคซีนที่ฉีดวันนี้</label><div class="row">{% for v in vaccines %}<div class="col-12 mb-2"><div class="form-check"><input class="form-check-input" type="checkbox" name="vaccines_today" value="{{v}}" id="chk_{{c.id}}_{{loop.index}}" {% if c.vaccines_today and v in c.vaccines_today %}checked{% endif %}><label class="form-check-label small" for="chk_{{c.id}}_{{loop.index}}">{{v}}</label></div></div>{% endfor %}</div></div><button class="btn btn-success w-100 rounded-pill py-3 mt-3 fw-bold shadow-sm">บันทึกประวัติ (ไม่ตัดสต็อก)</button></form></div></div></div>
+    {% endfor %}
+
     <button class="btn btn-float fw-bold" data-bs-toggle="modal" data-bs-target="#addModal"><i class="fas fa-plus me-2"></i>ลงทะเบียนเด็กใหม่</button>
 </div>
+
 <div class="modal fade" id="addModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered text-black"><div class="modal-content p-4">
 <h4 class="fw-bold text-success text-center mb-4"><i class="fas fa-user-plus me-2"></i>ลงทะเบียนเด็ก</h4><form action="/add_child" method="POST" class="row g-3">
-<div class="col-12"><label class="small fw-bold">ชื่อ-นามสกุล</label><input type="text" name="name" class="form-control" required></div><div class="col-12"><label class="small fw-bold text-danger">วันเกิด (วว/ดด/พศ)</label><input type="text" name="birth_date" class="form-control border-danger" placeholder="เช่น 1/1/2568" required></div><div class="col-12"><label class="small fw-bold">เลขบัตรประชาชน (ถ้ามี)</label><input type="text" name="id_card" class="form-control"></div><div class="col-12"><label class="small fw-bold">ที่อยู่</label><input type="text" name="address" class="form-control" placeholder="เช่น หมู่ 2"></div><button class="btn btn-success w-100 rounded-pill py-3 mt-4 fw-bold shadow-sm">บันทึกข้อมูล</button></form></div></div></div>
+<div class="col-12"><label class="small fw-bold">ชื่อ-นามสกุล</label><input type="text" name="name" class="form-control" required></div><div class="col-12"><label class="small fw-bold text-danger">วันเกิด (วว/ดด/พศ)</label><input type="text" name="birth_date" class="form-control border-danger" placeholder="เช่น 1/1/2568" required></div><div class="col-12"><label class="small fw-bold">เลขบัตรประชาชน (ถ้ามี)</label><input type="text" name="id_card" class="form-control"></div><div class="col-12"><label class="small fw-bold">ที่อยู่ (หมู่)</label><input type="text" name="address" class="form-control" placeholder="เช่น หมู่ 2"></div><button class="btn btn-success w-100 rounded-pill py-3 mt-4 fw-bold shadow-sm">บันทึกข้อมูล</button></form></div></div></div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script></body></html>'''
 
 STOCK_HTML = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">''' + STYLE_ASSETS + '''</head><body>''' + NAV_BAR + '''
@@ -170,31 +226,36 @@ def calculate_age_be(birth_be):
         return f"{months // 12} ปี {months % 12} เดือน" if months >= 12 else f"{months} เดือน"
     except: return "-"
 
-def get_auto_schedule_be(birth_be):
+def get_auto_schedule_be(birth_be, vaccines_done_str=""):
     try:
         parts = birth_be.split('/')
         d, m, y_be = int(parts[0]), int(parts[1]), int(parts[2])
         b_dt = datetime(y_be-543, m, d)
-        today = datetime.now()
-        next_vaccine, next_date_str = "ครบเกณฑ์", ""
+        done_list = [v.strip() for v in (vaccines_done_str or "").split(',') if v.strip()]
+        
+        next_vaccine, next_date_str = "ครบเกณฑ์", "-"
 
+        # เช็ควัคซีนทีละกลุ่มเดือน ถ้ากลุ่มไหนยังไม่ฉีดตัวใดตัวหนึ่งเลย ให้นัดตัวแรกของกลุ่มนั้น
         for months in sorted(VACCINE_SCHEDULE.keys()):
-            target_month = b_dt.month + months
-            target_year = b_dt.year + (target_month - 1) // 12
-            target_month = (target_month - 1) % 12 + 1
+            v_options = VACCINE_SCHEDULE[months]
+            is_done = any(opt in done_list for opt in v_options)
+            
+            if not is_done:
+                target_month = b_dt.month + months
+                target_year = b_dt.year + (target_month - 1) // 12
+                target_month = (target_month - 1) % 12 + 1
+                
+                if b_dt.day > 10:
+                    target_month += 1
+                    if target_month > 12:
+                        target_month = 1
+                        target_year += 1
 
-            if b_dt.day > 10:
-                target_month += 1
-                if target_month > 12:
-                    target_month = 1
-                    target_year += 1
+                app_dt = datetime(target_year, target_month, 10)
+                if app_dt.weekday() == 5: app_dt += timedelta(days=2)
+                elif app_dt.weekday() == 6: app_dt += timedelta(days=1)
 
-            app_dt = datetime(target_year, target_month, 10)
-            if app_dt.weekday() == 5: app_dt += timedelta(days=2)
-            elif app_dt.weekday() == 6: app_dt += timedelta(days=1)
-
-            if app_dt.date() >= today.date():
-                next_vaccine = VACCINE_SCHEDULE[months]
+                next_vaccine = v_options[0] # โชว์ชื่อตัวแรกของกลุ่มนั้นเป็นตัวนัดถัดไป
                 next_date_str = f"{app_dt.day}/{app_dt.month}/{app_dt.year + 543}"
                 break
         return next_vaccine, next_date_str
@@ -226,18 +287,29 @@ def index():
     rows = cur.fetchall()
     res = []
     today = datetime.now()
+    in_zone_keys = ["ม.2", "หมู่ 2", "ม.5", "หมู่ 5", "ม.7", "หมู่ 7", "02", "05", "07"]
+    
     for r in rows:
         d = dict(r)
         d['age_str'] = calculate_age_be(d['birth_date'])
-        d['in_zone'] = any(z in (d['address'] or "") for z in ["ม.2", "หมู่ 2", "ม.5", "หมู่ 5", "ม.7", "หมู่ 7"])
-        d['coverage_pct'] = int((len([v for v in CORE_VACCINES if (d['vaccines_today'] or "") and v in d['vaccines_today']]) / (len(CORE_VACCINES) or 1)) * 100)
-        nv, nd = get_auto_schedule_be(d['birth_date'])
-        d.update({'preview_next_v': nv, 'preview_next_d': nd, 'status': 'normal'})
+        addr_clean = (d['address'] or "").replace(" ", "")
+        d['in_zone'] = any(k.replace(" ", "") in addr_clean for k in in_zone_keys)
+        
+        # คำนวณความครอบคลุมใหม่ ให้นับกลุ่มวัคซีน (8 กลุ่ม) ไม่ใช่นับชื่อ
+        done_v_list = [v.strip() for v in (d['vaccines_today'] or "").split(',') if v.strip()]
+        groups_done = 0
+        for m in VACCINE_SCHEDULE:
+            if any(opt in done_v_list for opt in VACCINE_SCHEDULE[m]):
+                groups_done += 1
+        d['coverage_pct'] = int((groups_done / 8) * 100)
+        
+        d['status'] = 'normal'
         try:
             if d.get('appoint_date') and d.get('appoint_date') != '-':
                 p = d['appoint_date'].split('/')
-                app_dt = datetime(int(p[2])-543, int(p[1]), int(p[0]))
-                if d['next_vaccine'] and d['next_vaccine'] != "ครบเกณฑ์":
+                # แก้มัดบัคแปลงค่า (Strip ก่อนเพื่อตัดช่องว่างทิ้ง)
+                app_dt = datetime(int(p[2].strip())-543, int(p[1].strip()), int(p[0].strip()))
+                if d['next_vaccine'] != "ครบเกณฑ์":
                     if app_dt.date() < today.date(): d['status'] = 'overdue'
                     elif app_dt.year == today.year and app_dt.month == today.month: d['status'] = 'this_month'
         except: pass
@@ -246,6 +318,22 @@ def index():
         res.append(d)
     conn.close()
     return render_template_string(MAIN_HTML, children=res, vaccines=VACCINES_ALL, search=search, today_be=f"{today.day}/{today.month}/{today.year+543}", current_filter=filt)
+
+@app.route('/edit_child/<int:id>', methods=['POST'])
+@login_required
+def edit_child(id):
+    d = request.form
+    conn = get_db()
+    with conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT vaccines_today FROM children WHERE id=%s", (id,))
+            child = cur.fetchone()
+            nv, nd = get_auto_schedule_be(d.get('birth_date'), child['vaccines_today'])
+            cur.execute('''UPDATE children SET name=%s, id_card=%s, birth_date=%s, address=%s, 
+                           next_vaccine=%s, appoint_date=%s WHERE id=%s''', 
+                        (d.get('name'), d.get('id_card'), d.get('birth_date'), d.get('address'), nv, nd, id))
+    conn.close()
+    return redirect(url_for('index'))
 
 @app.route('/stock')
 @login_required
@@ -309,7 +397,7 @@ def restore_log(id):
 @login_required
 def add_child():
     d = request.form
-    nv, nd = get_auto_schedule_be(d.get('birth_date'))
+    nv, nd = get_auto_schedule_be(d.get('birth_date'), "")
     conn = get_db()
     with conn:
         with conn.cursor() as cur:
@@ -321,19 +409,26 @@ def add_child():
 @login_required
 def provide_service(id):
     d = request.form
-    v_list = d.getlist('vaccines_today')
+    v_list_today = d.getlist('vaccines_today')
     loc = d.get('location', 'รพ.สต.บางตะเคียน')
     visit_date = d.get('visit_date')
     conn = get_db()
     with conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute('SELECT name, vaccines_today, birth_date FROM children WHERE id=%s', (id,))
+            cur.execute('SELECT vaccines_today, birth_date FROM children WHERE id=%s', (id,))
             child = cur.fetchone()
-            old_v = (child['vaccines_today'] or "").split(', ')
-            newly_added = [v for v in v_list if v not in old_v]
-            nv, nd = get_auto_schedule_be(child['birth_date'])
-            cur.execute('UPDATE children SET weight=%s, height=%s, head_circ=%s, vaccines_today=%s, next_vaccine=%s, appoint_date=%s, visit_date=%s WHERE id=%s', (d.get('weight',0), d.get('height',0), d.get('head_circ',0), ", ".join(v_list), nv, nd, visit_date, id))
-            cur.execute('INSERT INTO growth_history (child_id, visit_date, age_at_visit, weight, height, head_circ) VALUES (%s,%s,%s,%s,%s,%s)', (id, visit_date, calculate_age_be(child['birth_date']), d.get('weight',0), d.get('height',0), d.get('head_circ',0)))
+            
+            old_v = [v.strip() for v in (child['vaccines_today'] or "").split(',') if v.strip()]
+            newly_added = [v for v in v_list_today if v not in old_v]
+            updated_v_list = list(set(old_v + v_list_today))
+            updated_v_str = ", ".join(updated_v_list)
+            
+            nv, nd = get_auto_schedule_be(child['birth_date'], updated_v_str)
+            
+            cur.execute('UPDATE children SET weight=%s, height=%s, head_circ=%s, vaccines_today=%s, next_vaccine=%s, appoint_date=%s, visit_date=%s WHERE id=%s', 
+                        (d.get('weight',0), d.get('height',0), d.get('head_circ',0), updated_v_str, nv, nd, visit_date, id))
+            cur.execute('INSERT INTO growth_history (child_id, visit_date, age_at_visit, weight, height, head_circ) VALUES (%s,%s,%s,%s,%s,%s)', 
+                        (id, visit_date, calculate_age_be(child['birth_date']), d.get('weight',0), d.get('height',0), d.get('head_circ',0)))
             for v in newly_added:
                 cur.execute('INSERT INTO vaccine_records (child_id, vaccine_name, receive_date, location) VALUES (%s,%s,%s,%s)', (id, v, visit_date, loc))
     conn.close()
@@ -353,11 +448,16 @@ def profile(id):
     v_rec = cur.fetchall()
     v_dict = {r['vaccine_name']: r for r in v_rec}
     conn.close()
-    age_str = calculate_age_be(child['birth_date'])
-    pct = int((len([v for v in CORE_VACCINES if (child['vaccines_today'] or "") and v in child['vaccines_today']]) / (len(CORE_VACCINES) or 1)) * 100)
+    
+    done_v_list = [v.strip() for v in (child['vaccines_today'] or "").split(',') if v.strip()]
+    groups_done = 0
+    for m in VACCINE_SCHEDULE:
+        if any(opt in done_v_list for opt in VACCINE_SCHEDULE[m]):
+            groups_done += 1
+    pct = int((groups_done / 8) * 100)
+    
     today_dt = datetime.now()
-    today_be_str = f"{today_dt.day}/{today_dt.month}/{today_dt.year + 543}"
-    return render_template_string(PROFILE_HTML, child=child, history=hist, vaccines=VACCINES_ALL, v_dict=v_dict, today_be=today_be_str, age_str=age_str, pct=pct)
+    return render_template_string(PROFILE_HTML, child=child, history=hist, vaccines=VACCINES_ALL, v_dict=v_dict, today_be=f"{today_dt.day}/{today_dt.month}/{today_dt.year + 543}", age_str=calculate_age_be(child['birth_date']), pct=pct)
 
 @app.route('/add_external_vaccine/<int:id>', methods=['POST'])
 @login_required
@@ -370,11 +470,11 @@ def add_external_vaccine(id):
             cur.execute('INSERT INTO vaccine_records (child_id, vaccine_name, receive_date, location) VALUES (%s,%s,%s,%s)', (id, v_name, v_date, v_loc))
             cur.execute('SELECT vaccines_today, birth_date FROM children WHERE id=%s', (id,))
             child = cur.fetchone()
-            cur_v = (child['vaccines_today'] or "").split(', ')
-            if v_name not in cur_v:
-                cur_v.append(v_name)
-                v_final = ", ".join([v for v in VACCINES_ALL if v in cur_v])
-                nv, nd = get_auto_schedule_be(child['birth_date'])
+            old_v = [v.strip() for v in (child['vaccines_today'] or "").split(',') if v.strip()]
+            if v_name not in old_v:
+                old_v.append(v_name)
+                v_final = ", ".join(old_v)
+                nv, nd = get_auto_schedule_be(child['birth_date'], v_final)
                 cur.execute('UPDATE children SET vaccines_today=%s, next_vaccine=%s, appoint_date=%s WHERE id=%s', (v_final, nv, nd, id))
     conn.close()
     return redirect(url_for('profile', id=id))

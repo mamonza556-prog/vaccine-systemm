@@ -172,18 +172,72 @@ STOCK_HTML = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="vie
             <div class="col-4"><select name="filter_type" class="form-select border-0 bg-light" onchange="this.form.submit()"><option value="ทั้งหมด">📦 ประเภท</option><option value="รับเข้า" {% if current_type == 'รับเข้า' %}selected{% endif %}>รับเข้า</option><option value="จ่ายออก" {% if current_type == 'จ่ายออก' %}selected{% endif %}>จ่ายออก</option></select></div>
         </form>
     </div>
-    {% for log in logs %}<div class="card p-3 mb-3"><div class="d-flex justify-content-between align-items-center">
-        <div><b class="text-dark fs-5">{{log.vaccine_name}}</b><br><small class="text-muted"><i class="far fa-calendar-alt me-1"></i>{{log.date}} | <i class="fas fa-map-marker-alt me-1"></i>{{log.source_destination}}</small><br><span class="badge bg-light text-secondary border mt-1">{{log.note}}</span></div>
-        <div class="text-end">
-            <div class="fw-bold {% if log.receive %}text-success{% else %}text-danger{% endif %} h3 m-0">
-                {% if log.receive %}+{{ log.receive }}{% else %}-{{ log.pay }}{% endif %}
+    
+    {% for log in logs %}
+    <div class="card p-3 mb-3">
+        <div class="d-flex justify-content-between align-items-center">
+            <div>
+                <b class="text-dark fs-5">{{log.vaccine_name}}</b>
+                {% if log.lot or log.exp %}
+                    <span class="badge bg-info text-dark ms-2 opacity-75">
+                        {% if log.lot %}Lot: {{log.lot}}{% endif %}
+                        {% if log.lot and log.exp %} | {% endif %}
+                        {% if log.exp %}Exp: {{log.exp}}{% endif %}
+                    </span>
+                {% endif %}
+                <br>
+                <small class="text-muted"><i class="far fa-calendar-alt me-1"></i>{{log.date}} | <i class="fas fa-map-marker-alt me-1"></i>{{log.source_destination}}</small><br>
+                <span class="badge bg-light text-secondary border mt-1">{{log.note}}</span>
             </div>
-            {% if view_deleted %}<a href="/restore_log/{{log.id}}" class="btn btn-sm btn-success rounded-pill px-3 mt-2"><i class="fas fa-undo me-1"></i>กู้คืน</a>
-            {% else %}<a href="/delete_log/{{log.id}}" class="text-danger opacity-50 d-block mt-2" onclick="return confirm('ลบรายการ?')"><i class="fas fa-trash-alt"></i></a>{% endif %}
+            <div class="text-end">
+                <div class="fw-bold {% if log.receive %}text-success{% else %}text-danger{% endif %} h3 m-0">
+                    {% if log.receive %}+{{ log.receive }}{% else %}-{{ log.pay }}{% endif %}
+                </div>
+                
+                {% if view_deleted %}
+                    <a href="/restore_log/{{log.id}}" class="btn btn-sm btn-success rounded-pill px-3 mt-2"><i class="fas fa-undo me-1"></i>กู้คืน</a>
+                {% else %}
+                    <div class="mt-2 d-flex justify-content-end align-items-center">
+                        <button class="btn btn-sm text-primary border-0 p-1 me-2" data-bs-toggle="modal" data-bs-target="#editStock{{log.id}}"><i class="fas fa-edit fs-5"></i></button>
+                        <a href="/delete_log/{{log.id}}" class="text-danger opacity-50 d-block p-1" onclick="return confirm('ลบรายการ?')"><i class="fas fa-trash-alt fs-5"></i></a>
+                    </div>
+                {% endif %}
+            </div>
         </div>
-    </div></div>{% endfor %}
+    </div>
+
+    <div class="modal fade" id="editStock{{log.id}}" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered text-black">
+            <div class="modal-content p-4">
+                <h5 class="fw-bold text-primary mb-3"><i class="fas fa-edit me-2"></i>แก้ไขสต็อก: {{log.vaccine_name}}</h5>
+                <form action="/edit_stock/{{log.id}}" method="POST" class="row g-3">
+                    <input type="hidden" name="action_type" value="{% if log.receive %}receive{% else %}pay{% endif %}">
+                    <div class="col-12">
+                        <label class="small fw-bold text-muted">จำนวน ({% if log.receive %}รับเข้า{% else %}จ่ายออก{% endif %})</label>
+                        <input type="number" name="amount" class="form-control" value="{% if log.receive %}{{log.receive}}{% else %}{{log.pay}}{% endif %}" required>
+                    </div>
+                    <div class="col-6">
+                        <label class="small fw-bold text-muted">Lot No.</label>
+                        <input type="text" name="lot" class="form-control" value="{{log.lot or ''}}">
+                    </div>
+                    <div class="col-6">
+                        <label class="small fw-bold text-muted">วันหมดอายุ (Exp)</label>
+                        <input type="date" name="exp_date" class="form-control" value="{{log.exp or ''}}">
+                    </div>
+                    <div class="col-12">
+                        <label class="small fw-bold text-muted">หมายเหตุ</label>
+                        <input type="text" name="note" class="form-control" value="{{log.note or ''}}">
+                    </div>
+                    <button class="btn btn-primary w-100 rounded-pill py-3 mt-4 fw-bold shadow-sm">บันทึกการแก้ไข</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+    
     <button class="btn btn-float fw-bold" data-bs-toggle="modal" data-bs-target="#stockModal"><i class="fas fa-exchange-alt me-2"></i>บันทึก รับ/จ่าย</button>
 </div>
+
 <div class="modal fade" id="stockModal" tabindex="-1"><div class="modal-dialog modal-dialog-centered text-black"><div class="modal-content p-4"><h4 class="fw-bold text-primary text-center mb-4"><i class="fas fa-boxes me-2"></i>บันทึกสต็อก</h4><form action="/add_stock" method="POST" class="row g-3">
 <div class="col-12"><label class="small fw-bold text-muted">วันที่</label><input type="date" name="log_date" class="form-control bg-light" value="{{today_date}}" required></div>
 <div class="col-12"><label class="small fw-bold text-muted">ชื่อวัคซีน</label><select name="vaccine_name" class="form-select">{% for n in vaccine_names %}<option>{{n}}</option>{% endfor %}</select></div>
@@ -218,7 +272,7 @@ def login_required(f):
 def calculate_age_be(birth_be):
     try:
         parts = birth_be.split('/')
-        d, m, y = int(parts[0]), int(parts[1]), int(parts[2])
+        d, m, y = int(parts), int(parts), int(parts)
         b_dt = datetime(y-543, m, d)
         today = datetime.now()
         months = (today.year - b_dt.year) * 12 + today.month - b_dt.month
@@ -229,7 +283,7 @@ def calculate_age_be(birth_be):
 def get_auto_schedule_be(birth_be, vaccines_done_str=""):
     try:
         parts = birth_be.split('/')
-        d, m, y_be = int(parts[0]), int(parts[1]), int(parts[2])
+        d, m, y_be = int(parts), int(parts), int(parts)
         b_dt = datetime(y_be-543, m, d)
         done_list = [v.strip() for v in (vaccines_done_str or "").split(',') if v.strip()]
         
@@ -255,7 +309,7 @@ def get_auto_schedule_be(birth_be, vaccines_done_str=""):
                 if app_dt.weekday() == 5: app_dt += timedelta(days=2)
                 elif app_dt.weekday() == 6: app_dt += timedelta(days=1)
 
-                next_vaccine = v_options[0] # โชว์ชื่อตัวแรกของกลุ่มนั้นเป็นตัวนัดถัดไป
+                next_vaccine = v_options # โชว์ชื่อตัวแรกของกลุ่มนั้นเป็นตัวนัดถัดไป
                 next_date_str = f"{app_dt.day}/{app_dt.month}/{app_dt.year + 543}"
                 break
         return next_vaccine, next_date_str
@@ -308,7 +362,7 @@ def index():
             if d.get('appoint_date') and d.get('appoint_date') != '-':
                 p = d['appoint_date'].split('/')
                 # แก้มัดบัคแปลงค่า (Strip ก่อนเพื่อตัดช่องว่างทิ้ง)
-                app_dt = datetime(int(p[2].strip())-543, int(p[1].strip()), int(p[0].strip()))
+                app_dt = datetime(int(p.strip())-543, int(p.strip()), int(p.strip()))
                 if d['next_vaccine'] != "ครบเกณฑ์":
                     if app_dt.date() < today.date(): d['status'] = 'overdue'
                     elif app_dt.year == today.year and app_dt.month == today.month: d['status'] = 'this_month'
@@ -372,6 +426,28 @@ def add_stock():
     with conn:
         with conn.cursor() as cur:
             cur.execute('INSERT INTO logs (date, vaccine_name, source_destination, receive, pay, lot, exp, note) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)', (d['log_date'], d['vaccine_name'], d['source_destination'], rcv, py, d.get('lot',''), d.get('exp_date',''), note))
+    conn.close()
+    return redirect(url_for('stock'))
+
+# --- เพิ่ม Route สำหรับ แก้ไขสต็อก ---
+@app.route('/edit_stock/<int:id>', methods=['POST'])
+@login_required
+def edit_stock(id):
+    d = request.form
+    amt = int(d['amount'])
+    action_type = d.get('action_type')
+    
+    # เช็คว่าของเดิมเป็น รับเข้า หรือ จ่ายออก เพื่อแก้ถูกฝั่ง
+    rcv = amt if action_type == 'receive' else 0
+    py = amt if action_type == 'pay' else 0
+    
+    conn = get_db()
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute('''UPDATE logs 
+                           SET receive=%s, pay=%s, lot=%s, exp=%s, note=%s 
+                           WHERE id=%s''', 
+                        (rcv, py, d.get('lot',''), d.get('exp_date',''), d.get('note',''), id))
     conn.close()
     return redirect(url_for('stock'))
 
